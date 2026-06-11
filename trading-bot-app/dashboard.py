@@ -7,13 +7,13 @@ Deploy:       Push to GitHub, connect repo to Streamlit Cloud
 """
 
 import json
-import math
 import os
 import sys
-import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 import streamlit as st
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
@@ -24,7 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Import pipeline functions ─────────────────────────────────────────────────
+# ── Import pipeline ───────────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 try:
     from pipeline import (
@@ -37,9 +37,13 @@ try:
         load_brier_log,
         load_trade_history,
         kill_switch_active,
-        SCAN_CONFIG, RESEARCH_CONFIG, PREDICT_CONFIG,
-        EXECUTION_CONFIG, COMPOUND_CONFIG,
-        BASE_DIR, PORTFOLIO_FILE,
+        step1_scan,
+        step2_research,
+        step3_predict,
+        step4_execute,
+        EXECUTION_CONFIG,
+        BASE_DIR,
+        PORTFOLIO_FILE,
     )
     PIPELINE_AVAILABLE = True
 except ImportError as e:
@@ -49,19 +53,8 @@ except ImportError as e:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-BIAS_COLORS = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}
-SENTIMENT_COLORS = {"BULLISH": "green", "BEARISH": "red", "NEUTRAL": "orange"}
-EDGE_COLORS = {"STRONG": "🟢", "MODERATE": "🟡", "WEAK": "🔴"}
-
-
-def badge(text: str, color: str) -> str:
-    """Return an inline HTML badge."""
-    bg = {"green": "#1a7f37", "red": "#cf222e", "orange": "#953800",
-          "blue": "#0969da", "gray": "#424a53"}.get(color, "#424a53")
-    return (
-        f'<span style="background:{bg};color:white;padding:2px 8px;'
-        f'border-radius:12px;font-size:12px;font-weight:600">{text}</span>'
-    )
+BIAS_COLORS      = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}
+EDGE_COLORS      = {"STRONG": "🟢", "MODERATE": "🟡", "WEAK": "🔴"}
 
 
 def score_bar(value: float, max_val: float = 100, color: str = "#2563eb") -> str:
@@ -74,24 +67,22 @@ def score_bar(value: float, max_val: float = 100, color: str = "#2563eb") -> str
 
 
 def fmt_pct(v) -> str:
-    if v is None:
-        return "—"
-    return f"{v:.1%}"
+    return "—" if v is None else f"{v:.1%}"
 
 
 def fmt_usd(v) -> str:
-    if v is None:
+    return "—" if v is None else f"${v:,.2f}"
+
+
+def fmt_ts(iso: str, label: str = "") -> str:
+    """Convert ISO-8601 UTC string to a readable label."""
+    if not iso:
         return "—"
-    return f"${v:,.2f}"
-
-
-def run_step(runner: SkillRunner, skill_name: str, payload: dict, step_label: str) -> dict:
-    return runner.run(BASE_DIR / skill_name, payload, step_label)
+    return iso[:19].replace("T", " ") + " UTC"
 
 
 def generate_interpretation(client, results: dict) -> str:
-    """Ask Claude to write a plain-English summary of the full pipeline run."""
-    summary_json = json.dumps(results, indent=2, default=str)[:6000]  # token budget
+    summary_json = json.dumps(results, indent=2, default=str)[:6000]
     resp = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=800,
@@ -105,10 +96,10 @@ def generate_interpretation(client, results: dict) -> str:
         messages=[{
             "role": "user",
             "content": (
-                f"Here are the results of a full 4-step AI trading pipeline scan. "
-                f"Write a plain-English summary: what was scanned, what the research found, "
-                f"which signals (if any) passed the edge threshold, and whether any mock trades "
-                f"were executed. End with one sentence on what to watch next.\n\n"
+                "Here are the results of a full AI trading pipeline scan. "
+                "Summarise: what was scanned, what research found, which signals (if any) "
+                "passed the edge threshold, and whether any mock trades were executed. "
+                "End with one sentence on what to watch next.\n\n"
                 f"Results:\n{summary_json}"
             ),
         }],
@@ -123,7 +114,7 @@ with st.sidebar:
     st.caption("Paper trading · $100k virtual portfolio")
     st.divider()
 
-    # API Key — prefer Streamlit secrets (for Cloud), fall back to sidebar input
+    # API key — Streamlit secrets (Cloud) → env var → sidebar input
     default_key = ""
     try:
         default_key = st.secrets.get("ANTHROPIC_API_KEY", "")
@@ -137,44 +128,43 @@ with st.sidebar:
         value=default_key,
         type="password",
         placeholder="sk-ant-...",
-        help="Get your key at console.anthropic.com. On Streamlit Cloud, add it to App Secrets instead.",
+        help="Get your key at console.anthropic.com. On Streamlit Cloud, set it in App Secrets.",
     )
 
     tickers_raw = st.text_input(
         "Tickers (comma-separated)",
         value="AAPL, TSLA, NVDA, AMD, MSFT",
         placeholder="AAPL, TSLA, NVDA, AMD",
-        help="Enter any US stock tickers. More tickers = higher chance of finding an edge.",
+        help="Enter any US stock tickers. More tickers = better chance of finding an edge signal.",
     )
 
     st.divider()
     run_btn = st.button("▶ Run Analysis", type="primary", use_container_width=True)
 
-    # Portfolio snapshot in sidebar
+    # Live portfolio snapshot
     st.divider()
     st.subheader("💼 Portfolio")
-    if PORTFOLIO_FILE.exists():
-        pf = PortfolioManager(PORTFOLIO_FILE).snapshot()
+    if PIPELINE_AVAILABLE and PORTFOLIO_FILE.exists():
+        pf   = PortfolioManager(PORTFOLIO_FILE).snapshot()
         peak = pf.get("peak_total_value", 100_000)
-        drawdown = (peak - pf["total_value"]) / peak if peak > 0 else 0
+        dd   = (peak - pf["total_value"]) / peak if peak > 0 else 0
         st.metric("Total Value",    fmt_usd(pf["total_value"]),
                   delta=fmt_usd(pf["all_time_pnl"]))
         st.metric("Cash",           fmt_usd(pf["cash_balance"]))
-        st.metric("Open Positions", len(pf["open_positions"]))
+        st.metric("Open Positions", len(pf.get("open_positions", [])))
         st.metric("Daily P&L",      fmt_usd(pf["daily_pnl"]))
-        if drawdown > 0:
-            st.metric("Max Drawdown", fmt_pct(drawdown),
-                      delta_color="inverse")
+        if dd > 0:
+            st.metric("Drawdown", fmt_pct(dd), delta_color="inverse")
         if kill_switch_active():
             st.error("⛔ Kill switch active")
     else:
-        st.caption("No portfolio file yet. Run the bot to start.")
+        st.caption("No portfolio yet — run the bot to start.")
 
     st.divider()
     st.caption("Built with Claude · yfinance · Streamlit")
 
 
-# ── Main area ─────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 st.title("📊 AI Trading Pipeline Dashboard")
 
@@ -183,12 +173,12 @@ if not PIPELINE_AVAILABLE:
              "Make sure `pipeline.py` is in the same folder as `dashboard.py`.")
     st.stop()
 
-# ── Initialise session state ──────────────────────────────────────────────────
+# Session state
 for key in ["scan", "research", "predict", "execution", "interpretation", "ran"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
-# ── Run pipeline when button pressed ─────────────────────────────────────────
+# ── Run block ─────────────────────────────────────────────────────────────────
 if run_btn:
     if not api_key or not api_key.startswith("sk-"):
         st.error("Please enter a valid Anthropic API key (starts with `sk-ant-...`).")
@@ -199,94 +189,75 @@ if run_btn:
         st.error("Please enter at least one ticker symbol.")
         st.stop()
 
+    # Inject API key so SkillRunner picks it up
     os.environ["ANTHROPIC_API_KEY"] = api_key
-
     import anthropic
-    runner  = SkillRunner()
-    client  = anthropic.Anthropic(api_key=api_key)
+    runner    = SkillRunner()
+    client    = anthropic.Anthropic(api_key=api_key)
+    portfolio = PortfolioManager(PORTFOLIO_FILE)
 
-    # ── Step 1 ────────────────────────────────────────────────────────────────
-    with st.status("⚙️ Step 1 — Scanning market data...", expanded=True) as s1:
-        st.write(f"Fetching yfinance data for: **{', '.join(tickers)}**")
+    # Step 1 — uses step1_scan() from pipeline so all timestamp/data-range logic applies
+    with st.status("⚙️ Step 1 — Fetching market data & scanning...", expanded=True) as s1:
+        st.write(f"Pulling 30-day yfinance data for: **{', '.join(tickers)}**")
         market_data = fetch_market_data(tickers)
         if not market_data:
-            st.error("Failed to fetch market data. Check ticker symbols.")
+            st.error("Failed to fetch market data. Check your ticker symbols.")
             st.stop()
-        payload = {"config": SCAN_CONFIG, "raw_market_data": market_data}
-        scan = run_step(runner, "scan_skill.md", payload, "STEP-1-SCAN")
+        dr = market_data[0].get("_data_range_start", "?") + " → " + \
+             market_data[0].get("_data_range_end", "?")
+        st.write(f"📅 Data window: **{dr}** · source: Yahoo Finance (live)")
+        scan = step1_scan(runner, tickers)
         st.session_state.scan = scan
         n_passed = scan.get("total_passed", len(scan.get("tickers", [])))
-        s1.update(label=f"✅ Step 1 — Scan complete: {n_passed}/{len(tickers)} tickers passed",
-                  state="complete")
+        s1.update(
+            label=f"✅ Step 1 — {n_passed}/{len(tickers)} tickers passed · data: {dr}",
+            state="complete",
+        )
 
-    # ── Step 2 ────────────────────────────────────────────────────────────────
+    # Step 2 — uses step2_research() so current_utc_time + timestamp override apply
     symbols = [t["symbol"] for t in scan.get("tickers", [])]
-    with st.status("⚙️ Step 2 — Gathering intelligence (parallel)...", expanded=True) as s2:
-        st.write(f"Scraping Yahoo Finance, Reddit, RSS for: **{', '.join(symbols)}**")
-        raw_source_data = build_research_data_parallel(symbols, RESEARCH_CONFIG)
-        payload = {
-            "scan_result":     scan,
-            "raw_source_data": raw_source_data,
-            "config":          RESEARCH_CONFIG,
-        }
-        research = run_step(runner, "research_skill.md", payload, "STEP-2-RESEARCH")
+    with st.status("⚙️ Step 2 — Multi-source intelligence gathering...", expanded=True) as s2:
+        st.write(f"Scraping Yahoo Finance, Reddit, RSS in parallel for: **{', '.join(symbols)}**")
+        research = step2_research(runner, scan)
         st.session_state.research = research
         n_briefs = len(research.get("briefs", []))
-        s2.update(label=f"✅ Step 2 — Research complete: {n_briefs} briefs produced",
-                  state="complete")
+        ts2 = fmt_ts(research.get("research_timestamp", ""))
+        s2.update(label=f"✅ Step 2 — {n_briefs} briefs produced · {ts2}", state="complete")
 
-    # ── Step 3 ────────────────────────────────────────────────────────────────
-    with st.status("⚙️ Step 3 — Running ensemble prediction...", expanded=True) as s3:
-        st.write("5-model ensemble vote · EV · Z-score · edge gate (>4%)")
-        brier_log = load_brier_log()
-        resolved  = [e for e in brier_log if e.get("brier_score") is not None]
-        calibration_log = {
-            "resolved_count": len(resolved),
-            "running_brier_score": (
-                sum(e["brier_score"] for e in resolved) / len(resolved) if resolved else None
-            ),
-        }
-        payload = {
-            "scan_result":     scan,
-            "research_result": research,
-            "calibration_log": calibration_log,
-            "config":          PREDICT_CONFIG,
-        }
-        predict = run_step(runner, "predict_skill.md", payload, "STEP-3-PREDICT")
+    # Step 3 — uses step3_predict() so ensemble + timestamps apply
+    with st.status("⚙️ Step 3 — Ensemble probability prediction...", expanded=True) as s3:
+        st.write("5-model ensemble vote · EV · Z-score · 4% edge gate")
+        predict = step3_predict(runner, scan, research)
         st.session_state.predict = predict
         passed  = predict.get("summary", {}).get("passed_gate", 0)
         blocked = predict.get("summary", {}).get("blocked_gate", 0)
-        s3.update(label=f"✅ Step 3 — Prediction: {passed} passed gate, {blocked} blocked",
-                  state="complete")
+        ts3 = fmt_ts(predict.get("predict_timestamp", ""))
+        s3.update(
+            label=f"✅ Step 3 — {passed} passed gate, {blocked} blocked · {ts3}",
+            state="complete",
+        )
 
-    # ── Step 4 ────────────────────────────────────────────────────────────────
+    # Step 4 — uses step4_execute()
     with st.status("⚙️ Step 4 — Risk checks & mock execution...", expanded=True) as s4:
-        st.write("Fractional Kelly · VaR · drawdown checks · mock Robinhood orders")
-        portfolio = PortfolioManager(PORTFOLIO_FILE)
-        pass_signals = [s for s in predict.get("signals", []) if s.get("pass_to_execution")]
-        if pass_signals:
-            engine    = MockRobinhoodEngine(portfolio, EXECUTION_CONFIG)
-            execution = engine.execute_signals(pass_signals)
-        else:
-            execution = {
-                "execution_timestamp": "",
-                "kill_switch_active":  kill_switch_active(),
-                "orders":              [],
-                "rejected_signals":    [],
-                "portfolio_summary":   portfolio.snapshot(),
-            }
+        st.write("Fractional Kelly · VaR · drawdown circuit breaker · mock Robinhood limit orders")
+        execution = step4_execute(predict, portfolio)
         st.session_state.execution = execution
         n_orders = len(execution.get("orders", []))
-        s4.update(label=f"✅ Step 4 — Execution: {n_orders} order(s) placed",
-                  state="complete")
+        ts4 = fmt_ts(execution.get("execution_timestamp", ""))
+        s4.update(label=f"✅ Step 4 — {n_orders} order(s) placed · {ts4}", state="complete")
 
-    # ── Interpretation ────────────────────────────────────────────────────────
+    # AI interpretation
     with st.status("⚙️ Generating AI interpretation...", expanded=True) as si:
         results_summary = {
+            "data_window": {
+                "start":  scan.get("data_range_start"),
+                "end":    scan.get("data_range_end"),
+                "source": scan.get("data_source"),
+            },
             "scan":      scan.get("tickers", []),
             "predict":   predict.get("signals", []),
             "execution": {
-                "orders":           execution.get("orders", []),
+                "orders":            execution.get("orders", []),
                 "portfolio_summary": execution.get("portfolio_summary", {}),
             },
         }
@@ -295,13 +266,45 @@ if run_btn:
         st.session_state.ran = True
         si.update(label="✅ Interpretation ready", state="complete")
 
-# ── Display results ───────────────────────────────────────────────────────────
+
+# ── Results display ───────────────────────────────────────────────────────────
 if st.session_state.ran:
     scan      = st.session_state.scan
     research  = st.session_state.research
     predict   = st.session_state.predict
     execution = st.session_state.execution
     interp    = st.session_state.interpretation
+
+    # ── Top info bar — timestamps + data window ───────────────────────────────
+    dr_start = scan.get("data_range_start", "—")
+    dr_end   = scan.get("data_range_end",   "—")
+    scan_ts  = fmt_ts(scan.get("scan_timestamp", ""))
+    res_ts   = fmt_ts(research.get("research_timestamp", ""))
+    pred_ts  = fmt_ts(predict.get("predict_timestamp", ""))
+    exec_ts  = fmt_ts(execution.get("execution_timestamp", ""))
+
+    with st.container(border=True):
+        st.markdown("#### 🕐 Pipeline Run Timestamps & Data Window")
+        ti1, ti2, ti3, ti4 = st.columns(4)
+        ti1.metric("📅 Data Window",      f"{dr_start} → {dr_end}",
+                   help="Actual trading days fetched from Yahoo Finance via yfinance")
+        ti2.metric("🔍 Scanned At",       scan_ts,
+                   help="Wall-clock time Step 1 completed")
+        ti3.metric("📰 Researched At",    res_ts,
+                   help="Wall-clock time Step 2 completed")
+        ti4.metric("🎯 Predicted At",     pred_ts,
+                   help="Wall-clock time Step 3 completed")
+
+        ti5, ti6, ti7, ti8 = st.columns(4)
+        ti5.metric("⚡ Executed At",      exec_ts,
+                   help="Wall-clock time Step 4 completed")
+        ti6.metric("📡 Data Source",      "Yahoo Finance (live)",
+                   help="All price/volume data fetched live via yfinance at run time")
+        ti7.metric("🗓️ Trading Days",     f"~{len(scan.get('tickers', [])) * 21}",
+                   help="Approx. trading day records loaded (~21 per ticker over 30 calendar days)")
+        ti8.metric("💱 Tickers Scanned",  scan.get("total_scanned", len(scan.get("tickers", []))))
+
+    st.divider()
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🔍 Step 1 · Scan",
@@ -315,18 +318,28 @@ if st.session_state.ran:
     with tab1:
         st.subheader("Market Scanner Results")
         tickers_data = scan.get("tickers", [])
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Tickers Scanned", scan.get("total_scanned", len(tickers_data)))
-        c2.metric("Passed Filters",  scan.get("total_passed", len(tickers_data)))
-        c3.metric("Scan Time",       scan.get("scan_timestamp", "—")[:19].replace("T", " "))
+
+        st.info(
+            f"📅 **Market data window:** {dr_start} → {dr_end} &nbsp;|&nbsp; "
+            f"Source: {scan.get('data_source', 'yfinance · Yahoo Finance (live)')} &nbsp;|&nbsp; "
+            f"Scanned at: {scan_ts}"
+        )
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Tickers Scanned",  scan.get("total_scanned", len(tickers_data)))
+        c2.metric("Passed Filters",   scan.get("total_passed",  len(tickers_data)))
+        c3.metric("Data Start",       dr_start)
+        c4.metric("Data End",         dr_end)
 
         st.divider()
 
         for t in tickers_data:
-            bias   = t.get("bias", "NEUTRAL")
-            icon   = BIAS_COLORS.get(bias, "🟡")
-            score  = t.get("opportunity_score", 0)
-            flags  = t.get("anomaly_flags", [])
+            bias  = t.get("bias", "NEUTRAL")
+            icon  = BIAS_COLORS.get(bias, "🟡")
+            score = t.get("opportunity_score", 0)
+            flags = t.get("anomaly_flags", [])
+            t_start = t.get("data_date_start", dr_start)
+            t_end   = t.get("data_date_end",   dr_end)
 
             with st.container(border=True):
                 col_a, col_b, col_c, col_d = st.columns([2, 3, 3, 4])
@@ -334,26 +347,27 @@ if st.session_state.ran:
                 with col_a:
                     st.markdown(f"### {t['symbol']}")
                     st.markdown(f"{icon} **{bias}**")
+                    st.caption(f"Data: {t_start} → {t_end}")
 
                 with col_b:
-                    st.metric("Price",        fmt_usd(t.get("last_price")))
+                    st.metric("Last Price",   fmt_usd(t.get("last_price")))
                     st.metric("Volume Ratio", f"{t.get('volume_ratio', 0):.2f}×")
 
                 with col_c:
-                    st.metric("RSI (14)",       f"{t.get('rsi_14', 0):.1f}")
-                    st.metric("1d Change",      f"{t.get('price_change_1d_pct', 0):+.2f}%")
+                    st.metric("RSI (14)",   f"{t.get('rsi_14', 0):.1f}")
+                    st.metric("1d Change",  f"{t.get('price_change_1d_pct', 0):+.2f}%")
 
                 with col_d:
                     st.markdown("**Opportunity Score**")
-                    st.markdown(
-                        score_bar(score, 100,
-                                  "#2563eb" if score > 60 else "#f59e0b" if score > 40 else "#dc2626"),
-                        unsafe_allow_html=True,
-                    )
+                    bar_color = ("#2563eb" if score > 60
+                                 else "#f59e0b" if score > 40
+                                 else "#dc2626")
+                    st.markdown(score_bar(score, 100, bar_color), unsafe_allow_html=True)
                     if flags:
-                        st.markdown(" ".join(
-                            f'<code style="font-size:11px">{f}</code>' for f in flags
-                        ), unsafe_allow_html=True)
+                        st.markdown(
+                            " ".join(f'<code style="font-size:11px">{f}</code>' for f in flags),
+                            unsafe_allow_html=True,
+                        )
 
         with st.expander("Raw JSON — Step 1"):
             st.json(scan)
@@ -361,15 +375,14 @@ if st.session_state.ran:
     # ── TAB 2: RESEARCH ───────────────────────────────────────────────────────
     with tab2:
         st.subheader("Multi-Source Intelligence Briefs")
+        st.caption(f"Researched at: {res_ts}")
         briefs = research.get("briefs", [])
 
         for brief in briefs:
-            sym     = brief.get("symbol", "")
-            status  = brief.get("source_status", "ok")
-            sent    = brief.get("sentiment", {})
-            gap_obj = brief.get("narrative_gap", {})
-            sources = brief.get("sources_available", [])
-
+            sym       = brief.get("symbol", "")
+            sent      = brief.get("sentiment", {})
+            gap_obj   = brief.get("narrative_gap", {})
+            sources   = brief.get("sources_available", [])
             consensus = sent.get("narrative_consensus", "NEUTRAL")
             conf      = sent.get("narrative_confidence", 0)
             gap       = gap_obj.get("narrative_gap", 0)
@@ -378,34 +391,31 @@ if st.session_state.ran:
 
             with st.expander(
                 f"{BIAS_COLORS.get(consensus, '🟡')} {sym} — "
-                f"{consensus} · Edge Signal: {EDGE_COLORS.get(edge_sig,'🔴')} {edge_sig}",
+                f"{consensus} · Edge Signal: {EDGE_COLORS.get(edge_sig, '🔴')} {edge_sig}",
                 expanded=True,
             ):
                 r1, r2, r3, r4 = st.columns(4)
-                r1.metric("Sentiment",    consensus)
-                r2.metric("Confidence",   fmt_pct(conf))
-                r3.metric("Bull Score",   f"{bull_score:.2f}")
+                r1.metric("Sentiment",     consensus)
+                r2.metric("Confidence",    fmt_pct(conf))
+                r3.metric("Bull Score",    f"{bull_score:.2f}")
                 r4.metric("Narrative Gap", f"{gap:+.3f}",
-                           delta_color="normal" if gap >= 0 else "inverse",
-                           help="Positive = sources more bullish than price implies")
+                          delta_color="normal" if gap >= 0 else "inverse",
+                          help="Positive = sources more bullish than price implies → potential upside")
 
                 st.markdown(f"**Sources used:** {', '.join(sources) if sources else 'none'}")
 
-                # Analyst ratings
-                yahoo = brief.get("yahoo", {})
+                yahoo   = brief.get("yahoo", {})
                 analyst = yahoo.get("analyst_ratings", {})
                 if analyst.get("consensus_rating"):
                     ac1, ac2, ac3 = st.columns(3)
-                    ac1.metric("Analyst Rating",  analyst.get("consensus_rating", "—"))
-                    ac2.metric("Price Target",    fmt_usd(analyst.get("mean_price_target")))
-                    ac3.metric("# Analysts",      analyst.get("num_analysts", 0))
+                    ac1.metric("Analyst Rating", analyst.get("consensus_rating", "—"))
+                    ac2.metric("Price Target",   fmt_usd(analyst.get("mean_price_target")))
+                    ac3.metric("# Analysts",     analyst.get("num_analysts", 0))
 
-                # Key drivers
                 drivers = sent.get("key_drivers", [])
                 if drivers:
                     st.markdown("**Key drivers:** " + " · ".join(f"`{d}`" for d in drivers))
 
-                # News headlines sample
                 news = yahoo.get("news", [])
                 if news:
                     st.markdown("**Recent headlines:**")
@@ -419,16 +429,17 @@ if st.session_state.ran:
     # ── TAB 3: PREDICT ────────────────────────────────────────────────────────
     with tab3:
         st.subheader("Ensemble Prediction & Edge Gate")
+        st.caption(f"Predicted at: {pred_ts}")
         signals = predict.get("signals", [])
         summ    = predict.get("summary", {})
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Evaluated",    summ.get("total_evaluated", len(signals)))
-        m2.metric("Passed Gate",  summ.get("passed_gate", 0))
-        m3.metric("Blocked",      summ.get("blocked_gate", 0))
+        m1.metric("Evaluated",   summ.get("total_evaluated", len(signals)))
+        m2.metric("Passed Gate", summ.get("passed_gate", 0))
+        m3.metric("Blocked",     summ.get("blocked_gate", 0))
         brier = summ.get("running_brier_score")
-        m4.metric("Brier Score",  f"{brier:.3f}" if brier else "No history",
-                  help="< 0.25 = well-calibrated model. Lower is better.")
+        m4.metric("Brier Score", f"{brier:.3f}" if brier else "No history",
+                  help="Prediction calibration. < 0.25 = well-calibrated. Lower is better.")
 
         st.divider()
 
@@ -438,7 +449,8 @@ if st.session_state.ran:
         if passed_sigs:
             st.markdown("### ✅ Signals That Passed the Gate")
             for sig in passed_sigs:
-                ens = sig.get("ensemble", {})
+                ens  = sig.get("ensemble", {})
+                comp = sig.get("components", {})
                 with st.container(border=True):
                     h1, h2, h3, h4, h5 = st.columns(5)
                     h1.metric("Symbol",      sig["symbol"])
@@ -447,47 +459,48 @@ if st.session_state.ran:
                     h4.metric("EV",          f"{sig.get('EV', 0):.3f}")
                     h5.metric("Probability", fmt_pct(sig.get("directional_probability")))
 
-                    st.markdown("**Ensemble model votes:**")
+                    st.markdown("**Ensemble model votes (5 independent models):**")
                     em1, em2, em3, em4, em5 = st.columns(5)
-                    em1.markdown(f"Technical<br>`{ens.get('p_technical',0):.2f}`",
-                                 unsafe_allow_html=True)
-                    em2.markdown(f"Sentiment<br>`{ens.get('p_sentiment',0):.2f}`",
-                                 unsafe_allow_html=True)
-                    em3.markdown(f"Analyst<br>`{ens.get('p_analyst',0):.2f}`",
-                                 unsafe_allow_html=True)
-                    em4.markdown(f"Gap<br>`{ens.get('p_gap',0):.2f}`",
-                                 unsafe_allow_html=True)
-                    em5.markdown(f"Anomaly<br>`{ens.get('p_anomaly',0):.2f}`",
-                                 unsafe_allow_html=True)
+                    for col, label, key in zip(
+                        [em1, em2, em3, em4, em5],
+                        ["Technical", "Sentiment", "Analyst", "Gap", "Anomaly"],
+                        ["p_technical", "p_sentiment", "p_analyst", "p_gap", "p_anomaly"],
+                    ):
+                        val = ens.get(key, 0)
+                        color = "#2563eb" if val >= 0.55 else "#6b7280"
+                        col.markdown(
+                            f"**{label}**<br>"
+                            + score_bar(val * 100, 100, color),
+                            unsafe_allow_html=True,
+                        )
 
-                    comp = sig.get("components", {})
-                    st.markdown("**Mispricing score breakdown:**")
+                    st.markdown("**Mispricing score components:**")
                     sc1, sc2, sc3, sc4 = st.columns(4)
                     for col, (label, val) in zip(
                         [sc1, sc2, sc3, sc4],
                         [("Technical", comp.get("technical", 50)),
                          ("Sentiment", comp.get("sentiment", 50)),
-                         ("Analyst",   comp.get("analyst", 50)),
-                         ("Gap",       comp.get("gap", 50))],
+                         ("Analyst",   comp.get("analyst",   50)),
+                         ("Gap",       comp.get("gap",       50))],
                     ):
                         col.markdown(
                             f"**{label}**<br>" + score_bar(val, 100),
                             unsafe_allow_html=True,
                         )
 
+                    if sig.get("model_dissent"):
+                        st.warning("⚠️ Model dissent detected — one or more models strongly disagree.")
+
         if blocked_sigs:
             st.markdown("### 🚫 Blocked Signals")
-            rows = []
-            for sig in blocked_sigs:
-                rows.append({
-                    "Symbol":     sig["symbol"],
-                    "Bias":       sig.get("bias", "—"),
-                    "Edge %":     f"{sig.get('edge_pct', 0):.2f}%",
-                    "Prob":       fmt_pct(sig.get("directional_probability")),
-                    "Mispricing": f"{sig.get('mispricing_score', 0):.1f}",
-                    "Reason":     sig.get("gate_fail_reason", "—"),
-                })
-            import pandas as pd
+            rows = [{
+                "Symbol":      s["symbol"],
+                "Bias":        s.get("bias", "—"),
+                "Edge %":      f"{s.get('edge_pct', 0):.2f}%",
+                "Probability": fmt_pct(s.get("directional_probability")),
+                "Mispricing":  f"{s.get('mispricing_score', 0):.1f}",
+                "Reason":      s.get("gate_fail_reason", "—"),
+            } for s in blocked_sigs]
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
         with st.expander("Raw JSON — Step 3"):
@@ -496,6 +509,7 @@ if st.session_state.ran:
     # ── TAB 4: EXECUTE ────────────────────────────────────────────────────────
     with tab4:
         st.subheader("Risk Management & Mock Execution")
+        st.caption(f"Executed at: {exec_ts}")
 
         if execution.get("kill_switch_active"):
             st.error("⛔ Kill switch is active — no trades executed.")
@@ -505,10 +519,10 @@ if st.session_state.ran:
             pf       = execution.get("portfolio_summary", {})
 
             e1, e2, e3, e4 = st.columns(4)
-            e1.metric("Orders Executed",  len(orders))
-            e2.metric("Risk Rejections",  len(rejected))
-            e3.metric("Cash Balance",     fmt_usd(pf.get("cash_balance")))
-            e4.metric("Total Value",      fmt_usd(pf.get("total_value")))
+            e1.metric("Orders Executed", len(orders))
+            e2.metric("Risk Rejections", len(rejected))
+            e3.metric("Cash Balance",    fmt_usd(pf.get("cash_balance")))
+            e4.metric("Total Value",     fmt_usd(pf.get("total_value")))
 
             if orders:
                 st.markdown("### 📋 Executed Orders")
@@ -517,11 +531,11 @@ if st.session_state.ran:
                     pd_ = o.get("portfolio_delta", {})
                     with st.container(border=True):
                         oc1, oc2, oc3, oc4, oc5 = st.columns(5)
-                        oc1.metric("Symbol",    op.get("symbol", "—"))
-                        oc2.metric("Side",      op.get("side", "—").upper())
-                        oc3.metric("Shares",    op.get("quantity", "—"))
+                        oc1.metric("Symbol",      op.get("symbol", "—"))
+                        oc2.metric("Side",        op.get("side", "—").upper())
+                        oc3.metric("Shares",      op.get("quantity", "—"))
                         oc4.metric("Limit Price", fmt_usd(op.get("limit_price")))
-                        oc5.metric("Cost",      fmt_usd(pd_.get("cash_deducted")))
+                        oc5.metric("Cost",        fmt_usd(pd_.get("cash_deducted")))
 
                         oi1, oi2, oi3 = st.columns(3)
                         oi1.metric("Stop Loss",    fmt_usd(op.get("stop_loss_price")))
@@ -529,36 +543,38 @@ if st.session_state.ran:
                         oi3.metric("Position VaR", fmt_usd(op.get("position_var_95")))
 
                         st.caption(
-                            f"Kelly fraction: {op.get('kelly_fraction_used', 0):.0%} · "
+                            f"Kelly: {op.get('kelly_fraction_used', 0):.0%} (quarter-Kelly) · "
                             f"Full Kelly: {op.get('full_kelly', 0):.3f} · "
                             f"Scaled Kelly: {op.get('scaled_kelly', 0):.3f} · "
-                            f"Client ID: `{op.get('client_id', '—')}`"
+                            f"ID: `{op.get('client_id', '—')}`"
                         )
             elif not rejected:
-                st.info("No signals cleared the prediction gate — nothing to execute. "
-                        "Try adding more tickers or running during higher-volatility sessions.")
+                st.info(
+                    "No signals cleared the prediction gate — nothing to execute. "
+                    "Try more tickers or run during higher-volatility sessions."
+                )
 
             if rejected:
                 st.markdown("### 🚫 Risk Rejections")
                 for r in rejected:
                     st.warning(f"**{r['symbol']}** — {r['rejection_reason']}")
 
-            # Portfolio detail
             st.divider()
-            st.markdown("### 💼 Portfolio State After Run")
-            open_pos = pf.get("open_positions", []) if isinstance(pf.get("open_positions"), list) else []
-            peak = pf.get("peak_total_value", EXECUTION_CONFIG["initial_capital"])
-            total = pf.get("total_value", 0)
+            st.markdown("### 💼 Portfolio After Run")
+            open_pos = pf.get("open_positions", [])
+            if not isinstance(open_pos, list):
+                open_pos = []
+            peak     = pf.get("peak_total_value", EXECUTION_CONFIG["initial_capital"])
+            total    = pf.get("total_value", 0)
             drawdown = (peak - total) / peak if peak > 0 else 0
 
             pfc1, pfc2, pfc3, pfc4 = st.columns(4)
-            pfc1.metric("Cash",          fmt_usd(pf.get("cash_balance")))
-            pfc2.metric("Equity",        fmt_usd(pf.get("equity_value")))
-            pfc3.metric("Open Pos.",     len(open_pos))
-            pfc4.metric("Max Drawdown",  fmt_pct(drawdown))
+            pfc1.metric("Cash",         fmt_usd(pf.get("cash_balance")))
+            pfc2.metric("Equity",       fmt_usd(pf.get("equity_value")))
+            pfc3.metric("Open Pos.",    len(open_pos))
+            pfc4.metric("Max Drawdown", fmt_pct(drawdown))
 
             if open_pos:
-                import pandas as pd
                 pos_rows = [{
                     "Symbol":      p["symbol"],
                     "Side":        p["side"],
@@ -583,29 +599,27 @@ if st.session_state.ran:
         st.subheader("📈 Trade History")
         history = load_trade_history()
         if history:
-            import pandas as pd
             hist_rows = [{
-                "Symbol":    t.get("symbol"),
-                "Side":      t.get("side"),
-                "Shares":    t.get("shares"),
-                "Entry":     fmt_usd(t.get("entry_price")),
-                "Exit":      fmt_usd(t.get("exit_price")),
-                "P&L":       fmt_usd(t.get("realised_pnl")),
+                "Symbol":      t.get("symbol"),
+                "Side":        t.get("side"),
+                "Shares":      t.get("shares"),
+                "Entry":       fmt_usd(t.get("entry_price")),
+                "Exit":        fmt_usd(t.get("exit_price")),
+                "P&L":         fmt_usd(t.get("realised_pnl")),
                 "Exit Reason": t.get("exit_reason", "—"),
-                "Date":      (t.get("exit_time") or "")[:10],
-            } for t in history[-20:]]  # last 20 trades
+                "Date":        (t.get("exit_time") or "")[:10],
+            } for t in history[-20:]]
             st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
 
-            wins   = sum(1 for t in history if t.get("realised_pnl", 0) > 0)
-            losses = len(history) - wins
+            wins      = sum(1 for t in history if t.get("realised_pnl", 0) > 0)
             total_pnl = sum(t.get("realised_pnl", 0) for t in history)
             sh1, sh2, sh3, sh4 = st.columns(4)
             sh1.metric("Total Trades",  len(history))
-            sh2.metric("Win Rate",      fmt_pct(wins / len(history)) if history else "—")
-            sh3.metric("Wins / Losses", f"{wins} / {losses}")
+            sh2.metric("Win Rate",      fmt_pct(wins / len(history)))
+            sh3.metric("Wins / Losses", f"{wins} / {len(history) - wins}")
             sh4.metric("All-Time P&L",  fmt_usd(total_pnl))
         else:
-            st.caption("No closed trades yet. Trades appear here once positions are closed.")
+            st.caption("No closed trades yet.")
 
         st.divider()
         kb = load_knowledge_base()
@@ -613,7 +627,8 @@ if st.session_state.ran:
             st.subheader("📚 Knowledge Base — Recent Lessons")
             for lesson in kb["lessons"][-5:]:
                 st.markdown(
-                    f"**{lesson.get('symbol', '—')}** · `{lesson.get('failure_type', '—')}` — "
+                    f"**{lesson.get('symbol', '—')}** · "
+                    f"`{lesson.get('failure_type', '—')}` — "
                     f"{lesson.get('lesson', '')}"
                 )
 
@@ -626,19 +641,22 @@ else:
     2. Type the **ticker symbols** you want to scan, separated by commas
     3. Click **▶ Run Analysis**
 
-    The bot will run all 4 pipeline steps and display results here:
+    The bot runs all 4 pipeline steps and displays live results:
 
     | Step | What it does |
     |------|-------------|
-    | 🔍 Scan | Filters tickers by liquidity, volume, RSI, and computes an Opportunity Score |
-    | 📰 Research | Scrapes Yahoo Finance, Reddit, and RSS feeds for each ticker; detects narrative gaps |
-    | 🎯 Predict | 5-model ensemble vote → edge calculation → gate (>4% edge required to trade) |
-    | ⚡ Execute | Fractional Kelly sizing, VaR check, mock Robinhood limit order |
+    | 🔍 Scan | Fetches 30 days of live yfinance data · filters by liquidity, volume, RSI · scores each ticker |
+    | 📰 Research | Scrapes Yahoo Finance, Reddit, RSS in parallel · sentiment analysis · narrative gap |
+    | 🎯 Predict | 5-model ensemble vote → EV + Z-score → 4% edge gate |
+    | ⚡ Execute | Fractional Kelly sizing · VaR check · mock Robinhood limit order |
 
-    A plain-English **AI interpretation** is generated at the end summarising what was found
-    and what to watch next.
+    **Timestamps shown for every step** — Scanned At, Researched At, Predicted At, Executed At —
+    all set by Python's real clock, never by the AI model.
+
+    **Data window** (e.g. `2026-05-12 → 2026-06-10`) shows the actual trading days
+    fetched live from Yahoo Finance — always current, never from training data.
 
     ---
-    💡 **Tip:** Start with 5–10 tickers for a fast test (~$0.10–0.20 in API cost).
-    The full universe (70+ tickers) costs ~$0.50–1.00 and takes 5–10 minutes.
+    💡 **Tip:** Start with 5–10 tickers (~$0.10–0.20 in API cost, ~2 min).
+    Full 70-ticker scan costs ~$0.50–1.00 and takes 5–10 minutes.
     """)

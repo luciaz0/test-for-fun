@@ -266,6 +266,9 @@ class PortfolioManager:
 def fetch_market_data(tickers: list) -> list:
     log.info(f"Fetching yfinance data for {len(tickers)} tickers...")
     records = []
+    data_date_start = None
+    data_date_end   = None
+
     try:
         raw = yf.download(
             tickers, period="30d", interval="1d",
@@ -282,6 +285,16 @@ def fetch_market_data(tickers: list) -> list:
             if df is None or df.empty or len(df) < 15:
                 continue
             df = df.dropna()
+
+            # Capture actual date range from the index (real trading days, not calendar days)
+            idx = df.index
+            sym_start = str(idx[0].date())
+            sym_end   = str(idx[-1].date())
+            if data_date_start is None or sym_start < data_date_start:
+                data_date_start = sym_start
+            if data_date_end is None or sym_end > data_date_end:
+                data_date_end = sym_end
+
             close  = df["Close"].values
             volume = df["Volume"].values
             high   = df["High"].values
@@ -307,11 +320,20 @@ def fetch_market_data(tickers: list) -> list:
                 "rsi_14":               round(rsi, 2),
                 "high":                 float(high[-1]),
                 "low":                  float(low[-1]),
+                "data_date_start":      sym_start,
+                "data_date_end":        sym_end,
             })
         except Exception as e:
             log.debug(f"Skipping {sym}: {e}")
 
-    log.info(f"Market data ready for {len(records)} tickers.")
+    # Attach the overall date range as top-level metadata on the first record
+    # (pipeline and dashboard read it from scan_result directly)
+    if records:
+        records[0]["_data_range_start"] = data_date_start
+        records[0]["_data_range_end"]   = data_date_end
+
+    log.info(f"Market data ready for {len(records)} tickers "
+             f"({data_date_start} → {data_date_end}).")
     return records
 
 
@@ -817,12 +839,24 @@ def step1_scan(runner: SkillRunner, universe: list) -> dict:
     market_data = fetch_market_data(universe)
     if not market_data:
         raise RuntimeError("Step 1: no market data fetched.")
+    now = datetime.now(timezone.utc).isoformat()
+    # Extract data range captured by fetch_market_data
+    data_range_start = market_data[0].get("_data_range_start") if market_data else None
+    data_range_end   = market_data[0].get("_data_range_end")   if market_data else None
+
     payload = {
-        "config":          SCAN_CONFIG,
-        "raw_market_data": market_data,
+        "config":           SCAN_CONFIG,
+        "raw_market_data":  market_data,
+        "current_utc_time": now,
     }
     result = runner.run(BASE_DIR / "scan_skill.md", payload, "STEP-1-SCAN")
-    log.info(f"Step 1 done: {result.get('total_passed', '?')} tickers passed.")
+    # Always override timestamps with Python wall-clock — Claude cannot know real time
+    result["scan_timestamp"]    = now
+    result["data_range_start"]  = data_range_start
+    result["data_range_end"]    = data_range_end
+    result["data_source"]       = "yfinance (Yahoo Finance) — live market data"
+    log.info(f"Step 1 done: {result.get('total_passed', '?')} tickers passed "
+             f"| Data: {data_range_start} → {data_range_end}")
     return result
 
 
@@ -836,12 +870,15 @@ def step2_research(runner: SkillRunner, scan_result: dict) -> dict:
 
     raw_source_data = build_research_data_parallel(symbols, RESEARCH_CONFIG)
 
+    now = datetime.now(timezone.utc).isoformat()
     payload = {
         "scan_result":      scan_result,
         "raw_source_data":  raw_source_data,
         "config":           RESEARCH_CONFIG,
+        "current_utc_time": now,
     }
     result = runner.run(BASE_DIR / "research_skill.md", payload, "STEP-2-RESEARCH")
+    result["research_timestamp"] = now
     log.info(f"Step 2 done: {len(result.get('briefs', []))} briefs produced.")
     return result
 
@@ -860,13 +897,20 @@ def step3_predict(runner: SkillRunner, scan_result: dict, research_result: dict)
             if resolved else None
         ),
     }
+    now = datetime.now(timezone.utc).isoformat()
     payload = {
         "scan_result":     scan_result,
         "research_result": research_result,
         "calibration_log": calibration_log,
         "config":          PREDICT_CONFIG,
+        "current_utc_time": now,
     }
     result = runner.run(BASE_DIR / "predict_skill.md", payload, "STEP-3-PREDICT")
+    result["predict_timestamp"] = now
+    # also stamp each signal's brier_log_entry with the real time
+    for sig in result.get("signals", []):
+        if sig.get("brier_log_entry"):
+            sig["brier_log_entry"]["predicted_at"] = now
     passed  = result.get("summary", {}).get("passed_gate", "?")
     blocked = result.get("summary", {}).get("blocked_gate", "?")
     log.info(f"Step 3 done: {passed} passed gate, {blocked} blocked.")
