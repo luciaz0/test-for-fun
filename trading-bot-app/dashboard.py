@@ -18,7 +18,7 @@ import streamlit as st
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
-    page_title="AI Trading Bot",
+    page_title="Stock Trading Bot",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
