@@ -599,15 +599,26 @@ class SkillRunner:
             raise RuntimeError("API cost limit exceeded")
 
         raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = "\n".join(raw.split("\n")[1:])
-        if raw.endswith("```"):
-            raw = "\n".join(raw.split("\n")[:-1])
+
+        # Robustly extract JSON regardless of markdown fences or prose wrapping.
+        # Strategy 1: pull the first {...} or [...] block via regex.
+        import re as _re
+        json_match = _re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', raw)
+        if json_match:
+            raw = json_match.group(1)
+        else:
+            # Strategy 2: strip ```json / ``` fences manually
+            lines = raw.split("\n")
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines)
 
         try:
             return json.loads(raw.strip())
         except json.JSONDecodeError as e:
-            log.error(f"[{step_name}] JSON parse failed: {e}\nRaw: {raw[:400]}")
+            log.error(f"[{step_name}] JSON parse failed: {e}\nRaw response: {raw[:600]}")
             raise
 
 
