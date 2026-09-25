@@ -3,8 +3,13 @@
 *.env
 !.env.example
 
-# generated run data (daily snapshots, dashboards, flag log)
-data/
+# generated run data: ignore the big raw per-day JSON dumps, but track the small
+# CSV/markdown summaries (these get synced to the GitHub clone and read by Streamlit Cloud).
+data/*
+!data/run_log.csv
+!data/ticker_log.csv
+!data/flag_log.csv
+!data/dashboard.md
 
 # OS / editor cruft
 .DS_Store
