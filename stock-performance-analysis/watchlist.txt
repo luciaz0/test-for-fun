@@ -2,7 +2,9 @@
 # Add or remove tickers here; no code changes needed.
 # Run: python orchestrator.py run --watchlist watchlist.txt
 AAPL
+GOOL
 NVDA
+NBIS
 TSLA
-MSFT
-GOOGL
+PLTR
+TEAM
