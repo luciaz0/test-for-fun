@@ -22,7 +22,7 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 
-st.set_page_config(page_title="Options screener dashboard", layout="wide")
+st.set_page_config(page_title="Stock Performance Analysis", layout="wide")
 
 
 @st.cache_data(ttl=60)
@@ -34,7 +34,7 @@ def load_csv(name: str) -> pd.DataFrame:
 
 
 def main() -> None:
-    st.title("📊 Options-activity screener — daily dashboard")
+    st.title("📊 Stock Performance Analysis — daily dashboard")
     st.caption(
         "Descriptive only, not a recommendation. Source: Yahoo Finance (delayed), via the 3-agent "
         "screener pipeline (`orchestrator.py`). Data refreshes from `data/run_log.csv` / "
