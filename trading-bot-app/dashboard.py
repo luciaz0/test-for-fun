@@ -166,7 +166,7 @@ with st.sidebar:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-st.title("📊 AI Trading Pipeline Dashboard")
+st.title("📊 Stock Trading Pipeline Dashboard")
 
 if not PIPELINE_AVAILABLE:
     st.error(f"Could not import pipeline.py: `{IMPORT_ERROR}`\n\n"
