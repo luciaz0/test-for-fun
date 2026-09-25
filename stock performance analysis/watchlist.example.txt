@@ -1,0 +1,8 @@
+# one ticker per line
+AAPL
+GOOL
+NVDA
+NBIS
+TSLA
+PLTR
+TEAM

@@ -1,0 +1,8 @@
+# Live daily watchlist — one ticker per line, '#' starts a comment.
+# Add or remove tickers here; no code changes needed.
+# Run: python orchestrator.py run --watchlist watchlist.txt
+AAPL
+NVDA
+TSLA
+MSFT
+GOOGL

@@ -1,0 +1,13 @@
+# secrets — never commit real credentials
+.env
+*.env
+!.env.example
+
+# generated run data (daily snapshots, dashboards, flag log)
+data/
+
+# OS / editor cruft
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/

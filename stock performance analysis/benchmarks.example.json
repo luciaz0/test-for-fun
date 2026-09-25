@@ -1,0 +1,5 @@
+{
+  "AAPL": {"peers": ["MSFT", "GOOGL"]},
+  "JPM":  {"sector_etf": "KBE", "peers": ["BAC", "C"]},
+  "XOM":  {"peers": ["CVX"]}
+}
