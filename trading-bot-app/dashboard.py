@@ -110,7 +110,7 @@ def generate_interpretation(client, results: dict) -> str:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.title("📈 AI Trading Bot")
+    st.title("📈 Stock Trading Bot")
     st.caption("Paper trading · $100k virtual portfolio")
     st.divider()
 
