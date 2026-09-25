@@ -25,8 +25,25 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
+PT = ZoneInfo("America/Los_Angeles")  # displays as PST or PDT depending on the date
+
+
+def to_pt_display(utc_iso: str) -> str:
+    """Convert a stored UTC ISO timestamp to a human-readable Pacific-time string.
+    The underlying CSV/JSON keep UTC (portable, unambiguous); only display converts to PT."""
+    if not utc_iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(utc_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        pt = dt.astimezone(PT)
+        return pt.strftime("%Y-%m-%d %I:%M:%S %p %Z")
+    except (ValueError, TypeError):
+        return utc_iso
 
 RUN_LOG_COLS = ["run_date", "completed_at_utc", "tickers", "ticker_count",
                 "flags_count", "flagged_tickers", "data_mode", "oi_missing_policy", "run_caveats"]
@@ -129,8 +146,8 @@ def write_csv(path: Path, rows: list[dict], cols: list[str]) -> None:
 
 def render_dashboard(run_rows: list[dict], ticker_rows: list[dict], lookback: int) -> str:
     L = ["# Options screener — daily dashboard", "",
-         f"_Last rebuilt: {utcnow_iso()}. Built from data/<date>/analysis_*.json + shortlist_*.json. "
-         f"Descriptive only, not a recommendation._", ""]
+         f"_Last rebuilt: {to_pt_display(utcnow_iso())}. Built from data/<date>/analysis_*.json + "
+         f"shortlist_*.json. Descriptive only, not a recommendation._", ""]
 
     if not run_rows:
         L.append("No completed runs found under `data/`. Run `python orchestrator.py run ...` first, "
@@ -138,10 +155,10 @@ def render_dashboard(run_rows: list[dict], ticker_rows: list[dict], lookback: in
         return "\n".join(L) + "\n"
 
     L += ["## Run history", "",
-          "| Date | Completed (UTC) | Tickers run | Flags | Flagged tickers |",
+          "| Date | Completed (PT) | Tickers run | Flags | Flagged tickers |",
           "|---|---|---|---|---|"]
     for r in run_rows[-lookback:]:
-        L.append(f"| {r['run_date']} | {r['completed_at_utc'] or '—'} | {r['ticker_count']} "
+        L.append(f"| {r['run_date']} | {to_pt_display(r['completed_at_utc']) or '—'} | {r['ticker_count']} "
                   f"| {r['flags_count']} | {r['flagged_tickers']} |")
     L.append("")
 

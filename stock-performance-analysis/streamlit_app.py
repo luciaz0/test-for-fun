@@ -13,7 +13,9 @@ It does not call Yahoo or Claude and does not run the screener itself — run th
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -21,8 +23,23 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
+PT = ZoneInfo("America/Los_Angeles")  # displays as PST or PDT depending on the date
 
 st.set_page_config(page_title="Stock Performance Analysis", layout="wide")
+
+
+def to_pt_display(utc_iso: str) -> str:
+    """Convert a stored UTC ISO timestamp to a human-readable Pacific-time string.
+    Underlying CSVs keep UTC (portable, unambiguous); only the UI converts to PT."""
+    if not utc_iso or pd.isna(utc_iso):
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(utc_iso))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(PT).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+    except (ValueError, TypeError):
+        return str(utc_iso)
 
 
 @st.cache_data(ttl=60)
@@ -63,7 +80,7 @@ def main() -> None:
     c1.metric("Tickers screened", int(latest_run["ticker_count"]))
     c2.metric("Flags", int(latest_run["flags_count"]))
     c3.metric("Total runs logged", len(run_df))
-    c4.metric("Completed (UTC)", str(latest_run["completed_at_utc"]).replace("T", " ").split("+")[0])
+    c4.metric("Completed (PT)", to_pt_display(latest_run["completed_at_utc"]))
 
     if latest_run["flags_count"] > 0:
         st.success(f"Flagged tickers: {latest_run['flagged_tickers']}")
@@ -77,9 +94,11 @@ def main() -> None:
 
     st.divider()
     st.subheader("Run history")
+    run_display = run_df.copy()
+    run_display["completed_at_pt"] = run_display["completed_at_utc"].apply(to_pt_display)
     st.dataframe(
-        run_df[["run_date", "completed_at_utc", "ticker_count", "flags_count", "flagged_tickers",
-                "data_mode", "oi_missing_policy"]],
+        run_display[["run_date", "completed_at_pt", "ticker_count", "flags_count", "flagged_tickers",
+                     "data_mode", "oi_missing_policy"]].rename(columns={"completed_at_pt": "Completed (PT)"}),
         use_container_width=True, hide_index=True,
     )
 
