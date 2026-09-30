@@ -558,7 +558,7 @@ class SkillRunner:
         self.model  = model
         self._api_cost_today = 0.0
 
-    def run(self, skill_path: Path, payload: dict, step_name: str) -> dict:
+    def run(self, skill_path: Path, payload: dict, step_name: str, max_tokens: int = 8192) -> dict:
         skill_text   = skill_path.read_text()
         payload_json = json.dumps(payload, indent=2, default=str)
 
@@ -579,7 +579,7 @@ class SkillRunner:
 
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
@@ -591,14 +591,41 @@ class SkillRunner:
         log.info(
             f"[{step_name}] Done in {elapsed:.1f}s | "
             f"tokens: {response.usage.input_tokens}in/{response.usage.output_tokens}out | "
-            f"cost: ~${cost:.4f} | daily total: ~${self._api_cost_today:.3f}"
+            f"cost: ~${cost:.4f} | daily total: ~${self._api_cost_today:.3f} | "
+            f"stop_reason: {response.stop_reason}"
         )
 
         if self._api_cost_today > EXECUTION_CONFIG["max_daily_api_cost_usd"]:
             log.error("Daily API cost limit exceeded — halting pipeline.")
             raise RuntimeError("API cost limit exceeded")
 
-        raw = response.content[0].text.strip()
+        # Pull only the text-type content blocks. If thinking/reasoning is ever
+        # enabled for this model, `response.content[0]` may be a "thinking"
+        # block rather than the final answer, so never index blindly.
+        text_blocks = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+        raw = "".join(text_blocks).strip()
+
+        if response.stop_reason == "max_tokens":
+            # The model ran out of output budget mid-answer — the JSON is
+            # guaranteed to be incomplete, so parsing it would only produce a
+            # confusing JSONDecodeError. Fail loudly and explain the real cause.
+            log.error(
+                f"[{step_name}] Claude's response was truncated (stop_reason=max_tokens, "
+                f"max_tokens={max_tokens}). The output is incomplete JSON and cannot be parsed. "
+                f"Raw (truncated) response tail: ...{raw[-400:]}"
+            )
+            raise RuntimeError(
+                f"[{step_name}] Claude's response hit the {max_tokens}-token output limit before "
+                f"finishing, so the JSON is incomplete. Increase max_tokens for this step (or "
+                f"reduce the payload size, e.g. fewer tickers / lower max_items_per_source) and "
+                f"try again."
+            )
+
+        if not raw:
+            raise RuntimeError(
+                f"[{step_name}] Claude returned no text content (stop_reason={response.stop_reason}). "
+                f"Content block types: {[getattr(b, 'type', None) for b in response.content]}"
+            )
 
         # Robustly extract JSON regardless of markdown fences or prose wrapping.
         # Strategy 1: pull the first {...} or [...] block via regex.
@@ -619,7 +646,11 @@ class SkillRunner:
             return json.loads(raw.strip())
         except json.JSONDecodeError as e:
             log.error(f"[{step_name}] JSON parse failed: {e}\nRaw response: {raw[:600]}")
-            raise
+            raise RuntimeError(
+                f"[{step_name}] Claude's response could not be parsed as JSON ({e}). "
+                f"This usually means the model added prose/commentary around the JSON, or the "
+                f"response was truncated. See logs for the raw response text."
+            ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -860,7 +891,7 @@ def step1_scan(runner: SkillRunner, universe: list) -> dict:
         "raw_market_data":  market_data,
         "current_utc_time": now,
     }
-    result = runner.run(BASE_DIR / "scan_skill.md", payload, "STEP-1-SCAN")
+    result = runner.run(BASE_DIR / "scan_skill.md", payload, "STEP-1-SCAN", max_tokens=8192)
     # Always override timestamps with Python wall-clock — Claude cannot know real time
     result["scan_timestamp"]    = now
     result["data_range_start"]  = data_range_start
@@ -888,7 +919,15 @@ def step2_research(runner: SkillRunner, scan_result: dict) -> dict:
         "config":           RESEARCH_CONFIG,
         "current_utc_time": now,
     }
-    result = runner.run(BASE_DIR / "research_skill.md", payload, "STEP-2-RESEARCH")
+    # Step 2 briefs are the largest output of the pipeline: up to len(symbols) tickers,
+    # each with Yahoo/Twitter/Reddit/RSS breakdowns + narrative gap. The previous 4096-token
+    # cap silently truncated the JSON mid-response for more than a handful of tickers,
+    # which surfaced downstream as `json.decoder.JSONDecodeError` in dashboard.py.
+    research_max_tokens = min(4096 + 900 * max(len(symbols), 1), 16384)
+    result = runner.run(
+        BASE_DIR / "research_skill.md", payload, "STEP-2-RESEARCH",
+        max_tokens=research_max_tokens,
+    )
     result["research_timestamp"] = now
     log.info(f"Step 2 done: {len(result.get('briefs', []))} briefs produced.")
     return result
@@ -916,7 +955,11 @@ def step3_predict(runner: SkillRunner, scan_result: dict, research_result: dict)
         "config":          PREDICT_CONFIG,
         "current_utc_time": now,
     }
-    result = runner.run(BASE_DIR / "predict_skill.md", payload, "STEP-3-PREDICT")
+    predict_max_tokens = min(4096 + 400 * max(len(scan_result.get("tickers", [])), 1), 12288)
+    result = runner.run(
+        BASE_DIR / "predict_skill.md", payload, "STEP-3-PREDICT",
+        max_tokens=predict_max_tokens,
+    )
     result["predict_timestamp"] = now
     # also stamp each signal's brier_log_entry with the real time
     for sig in result.get("signals", []):
