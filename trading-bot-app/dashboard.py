@@ -18,7 +18,7 @@ import streamlit as st
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
-    page_title="Stock Trading Bot",
+    page_title="Stock Prediction Bot",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -110,7 +110,7 @@ def generate_interpretation(client, results: dict) -> str:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.title("📈 Stock Trading Bot")
+    st.title("📈 Stock Prediction Bot")
     st.caption("Paper trading · $100k virtual portfolio")
     st.divider()
 
