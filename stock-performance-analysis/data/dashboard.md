@@ -1,6 +1,6 @@
 # Options screener — daily dashboard
 
-_Last rebuilt: 2026-10-02 11:37:55 PM PDT. Built from data/<date>/analysis_*.json + shortlist_*.json. Descriptive only, not a recommendation._
+_Last rebuilt: 2026-10-02 11:56:57 PM PDT. Built from data/<date>/analysis_*.json + shortlist_*.json. Descriptive only, not a recommendation._
 
 ## Run history
 
@@ -13,7 +13,7 @@ _Last rebuilt: 2026-10-02 11:37:55 PM PDT. Built from data/<date>/analysis_*.jso
 | 2026-09-30 | 2026-09-30 09:22:29 AM PDT | 7 | 0 | none |
 | 2026-10-01 | 2026-10-01 10:48:30 AM PDT | 7 | 0 | none |
 | 2026-10-02 | 2026-10-02 10:09:27 AM PDT | 7 | 0 | none |
-| 2026-10-03 | 2026-10-02 11:37:54 PM PDT | 7 | 0 | none |
+| 2026-10-03 | 2026-10-02 11:56:55 PM PDT | 7 | 0 | none |
 
 ## Latest run detail — 2026-10-03
 
