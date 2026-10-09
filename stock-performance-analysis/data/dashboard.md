@@ -1,6 +1,6 @@
 # Options screener — daily dashboard
 
-_Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.json + shortlist_*.json. Descriptive only, not a recommendation._
+_Last rebuilt: 2026-10-09 10:45:25 AM PDT. Built from data/<date>/analysis_*.json + shortlist_*.json. Descriptive only, not a recommendation._
 
 ## Run history
 
@@ -17,18 +17,19 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 2026-10-06 10:42:24 AM PDT | 7 | 0 | none |
 | 2026-10-07 | 2026-10-07 11:32:28 AM PDT | 7 | 0 | none |
 | 2026-10-08 | 2026-10-08 11:39:23 AM PDT | 7 | 2 | AAPL GOOGL |
+| 2026-10-09 | 2026-10-09 10:45:25 AM PDT | 7 | 1 | NVDA |
 
-## Latest run detail — 2026-10-08
+## Latest run detail — 2026-10-09
 
 | Ticker | Opt volume | C/P today | Baseline status | z-score | OI | Price 1d% | Sector-wide | Flag |
 |---|---|---|---|---|---|---|---|---|
-| AAPL | 302293 | 2.581 | INSUFFICIENT_HISTORY | — | OPENED | 0.34 | UNAVAILABLE | ⚑ |
-| GOOGL | 203508 | 3.707 | INSUFFICIENT_HISTORY | — | OPENED | — | UNAVAILABLE | ⚑ |
-| NBIS | 254941 | 1.747 | INSUFFICIENT_HISTORY | — | OPENED | -6.35 | UNAVAILABLE |  |
-| NVDA | 2106114 | 1.428 | INSUFFICIENT_HISTORY | — | OPENED | -2.76 | UNAVAILABLE |  |
-| PLTR | 805647 | 1.997 | INSUFFICIENT_HISTORY | — | OPENED | 1.69 | UNAVAILABLE |  |
-| TEAM | 5177 | 1.004 | INSUFFICIENT_HISTORY | — | MIXED | 2.74 | UNAVAILABLE |  |
-| TSLA | 1050889 | 1.28 | INSUFFICIENT_HISTORY | — | OPENED | -1.71 | UNAVAILABLE |  |
+| AAPL | 784787 | 1.523 | INSUFFICIENT_HISTORY | — | MIXED | -1.68 | UNAVAILABLE |  |
+| GOOGL | 220319 | 2.976 | INSUFFICIENT_HISTORY | — | OPENED | 1.57 | UNAVAILABLE |  |
+| NBIS | 97568 | 1.572 | INSUFFICIENT_HISTORY | — | OPENED | 0.42 | UNAVAILABLE |  |
+| NVDA | 1525328 | 1.433 | INSUFFICIENT_HISTORY | — | OPENED | -0.21 | UNAVAILABLE | ⚑ |
+| PLTR | 654733 | 1.802 | INSUFFICIENT_HISTORY | — | OPENED | 3.45 | UNAVAILABLE |  |
+| TEAM | 3156 | 3.02 | INSUFFICIENT_HISTORY | — | OPENED | 0.76 | UNAVAILABLE |  |
+| TSLA | 2630335 | 1.736 | INSUFFICIENT_HISTORY | — | OPENED | 2.16 | UNAVAILABLE |  |
 
 ## Per-ticker options-volume trend (most recent sessions)
 
@@ -47,6 +48,7 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 381822 | 1.756 | — | OPENED | 0.01 |
 | 2026-10-07 | 805413 | 2.317 | — | OPENED | 0.58 |
 | 2026-10-08 | 302293 | 2.581 | — | OPENED | 0.34 |
+| 2026-10-09 | 784787 | 1.523 | — | MIXED | -1.68 |
 
 **GOOGL**
 
@@ -63,6 +65,7 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 149626 | 3.222 | — | OPENED | 0.7 |
 | 2026-10-07 | 253803 | 1.879 | — | OPENED | -0.55 |
 | 2026-10-08 | 203508 | 3.707 | — | OPENED | — |
+| 2026-10-09 | 220319 | 2.976 | — | OPENED | 1.57 |
 
 **MSFT**
 
@@ -84,6 +87,7 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 245968 | 1.675 | — | OPENED | 8.44 |
 | 2026-10-07 | 139770 | 1.389 | — | MIXED | -5.86 |
 | 2026-10-08 | 254941 | 1.747 | — | OPENED | -6.35 |
+| 2026-10-09 | 97568 | 1.572 | — | OPENED | 0.42 |
 
 **NVDA**
 
@@ -100,6 +104,7 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 1193745 | 1.509 | — | OPENED | 1.11 |
 | 2026-10-07 | 1349943 | 1.375 | — | OPENED | -0.97 |
 | 2026-10-08 | 2106114 | 1.428 | — | OPENED | -2.76 |
+| 2026-10-09 | 1525328 | 1.433 | — | OPENED | -0.21 |
 
 **PLTR**
 
@@ -115,6 +120,7 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 225690 | 2.116 | — | OPENED | 1.8 |
 | 2026-10-07 | 183064 | 2.059 | — | OPENED | 0.73 |
 | 2026-10-08 | 805647 | 1.997 | — | OPENED | 1.69 |
+| 2026-10-09 | 654733 | 1.802 | — | OPENED | 3.45 |
 
 **TEAM**
 
@@ -130,6 +136,7 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 4411 | 1.33 | — | OPENED | -1.54 |
 | 2026-10-07 | 2787 | 0.608 | — | MIXED | 1.3 |
 | 2026-10-08 | 5177 | 1.004 | — | MIXED | 2.74 |
+| 2026-10-09 | 3156 | 3.02 | — | OPENED | 0.76 |
 
 **TSLA**
 
@@ -146,4 +153,5 @@ _Last rebuilt: 2026-10-08 11:39:24 AM PDT. Built from data/<date>/analysis_*.jso
 | 2026-10-06 | 880071 | 1.757 | — | OPENED | 0.51 |
 | 2026-10-07 | 1322104 | 1.083 | — | OPENED | -1.2 |
 | 2026-10-08 | 1050889 | 1.28 | — | OPENED | -1.71 |
+| 2026-10-09 | 2630335 | 1.736 | — | OPENED | 2.16 |
 
